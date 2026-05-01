@@ -11,7 +11,7 @@ import { Env, ChatMessage } from "./types";
 
 // Model ID for Workers AI model
 // https://developers.cloudflare.com/workers-ai/models/
-const MODEL_ID = "@cf/openai/gpt-oss-20b";
+const MODEL_ID = "openai/gpt-5.4-nano";
 
 // Default system prompt
 const SYSTEM_PROMPT =
