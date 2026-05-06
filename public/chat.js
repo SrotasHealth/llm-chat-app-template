@@ -9,6 +9,7 @@ const chatMessages = document.getElementById("chat-messages");
 const userInput = document.getElementById("user-input");
 const sendButton = document.getElementById("send-button");
 const typingIndicator = document.getElementById("typing-indicator");
+const modelSelect = document.getElementById("model-select");
 
 // Chat state
 let chatHistory = [
@@ -50,6 +51,7 @@ async function sendMessage() {
 	isProcessing = true;
 	userInput.disabled = true;
 	sendButton.disabled = true;
+	modelSelect.disabled = true;
 
 	// Add user message to chat
 	addMessageToChat("user", message);
@@ -64,18 +66,26 @@ async function sendMessage() {
 	// Add message to history
 	chatHistory.push({ role: "user", content: message });
 
+	let assistantTextEl = null;
+	let metricsEl = null;
 	try {
 		// Create new assistant response element
 		const assistantMessageEl = document.createElement("div");
 		assistantMessageEl.className = "message assistant-message";
-		assistantMessageEl.innerHTML = "<p></p>";
+		assistantTextEl = document.createElement("p");
+		metricsEl = document.createElement("div");
+		metricsEl.className = "message-metrics";
+		metricsEl.textContent = "TTFS: pending | Completion: pending";
+		assistantMessageEl.append(assistantTextEl, metricsEl);
 		chatMessages.appendChild(assistantMessageEl);
-		const assistantTextEl = assistantMessageEl.querySelector("p");
 
 		// Scroll to bottom
 		chatMessages.scrollTop = chatMessages.scrollHeight;
 
 		// Send request to API
+		const requestStartedAt = performance.now();
+		let ttfsMs = null;
+		let completionMs = null;
 		const response = await fetch("/api/chat", {
 			method: "POST",
 			headers: {
@@ -83,6 +93,7 @@ async function sendMessage() {
 			},
 			body: JSON.stringify({
 				messages: chatHistory,
+				model: modelSelect.value,
 			}),
 		});
 
@@ -110,6 +121,41 @@ async function sendMessage() {
 			assistantTextEl.textContent = responseText;
 			chatMessages.scrollTop = chatMessages.scrollHeight;
 		};
+		const updateMetrics = () => {
+			const ttfs = ttfsMs === null ? "pending" : `${ttfsMs} ms`;
+			const completion =
+				completionMs === null ? "pending" : `${completionMs} ms`;
+			metricsEl.textContent = `TTFS: ${ttfs} | Completion: ${completion}`;
+		};
+		const handleSseData = (data) => {
+			if (data === "[DONE]") {
+				return true;
+			}
+			try {
+				const jsonData = JSON.parse(data);
+				// Handle both Workers AI format (response) and OpenAI format (choices[0].delta.content)
+				let content = "";
+				if (
+					typeof jsonData.response === "string" &&
+					jsonData.response.length > 0
+				) {
+					content = jsonData.response;
+				} else if (jsonData.choices?.[0]?.delta?.content) {
+					content = jsonData.choices[0].delta.content;
+				}
+				if (content) {
+					if (ttfsMs === null) {
+						ttfsMs = Math.round(performance.now() - requestStartedAt);
+						updateMetrics();
+					}
+					responseText += content;
+					flushAssistantText();
+				}
+			} catch (e) {
+				console.error("Error parsing SSE data as JSON:", e, data);
+			}
+			return false;
+		};
 
 		let sawDone = false;
 		while (true) {
@@ -119,27 +165,8 @@ async function sendMessage() {
 				// Process any remaining complete events in buffer
 				const parsed = consumeSseEvents(buffer + "\n\n");
 				for (const data of parsed.events) {
-					if (data === "[DONE]") {
+					if (handleSseData(data)) {
 						break;
-					}
-					try {
-						const jsonData = JSON.parse(data);
-						// Handle both Workers AI format (response) and OpenAI format (choices[0].delta.content)
-						let content = "";
-						if (
-							typeof jsonData.response === "string" &&
-							jsonData.response.length > 0
-						) {
-							content = jsonData.response;
-						} else if (jsonData.choices?.[0]?.delta?.content) {
-							content = jsonData.choices[0].delta.content;
-						}
-						if (content) {
-							responseText += content;
-							flushAssistantText();
-						}
-					} catch (e) {
-						console.error("Error parsing SSE data as JSON:", e, data);
 					}
 				}
 				break;
@@ -150,35 +177,18 @@ async function sendMessage() {
 			const parsed = consumeSseEvents(buffer);
 			buffer = parsed.buffer;
 			for (const data of parsed.events) {
-				if (data === "[DONE]") {
+				if (handleSseData(data)) {
 					sawDone = true;
 					buffer = "";
 					break;
-				}
-				try {
-					const jsonData = JSON.parse(data);
-					// Handle both Workers AI format (response) and OpenAI format (choices[0].delta.content)
-					let content = "";
-					if (
-						typeof jsonData.response === "string" &&
-						jsonData.response.length > 0
-					) {
-						content = jsonData.response;
-					} else if (jsonData.choices?.[0]?.delta?.content) {
-						content = jsonData.choices[0].delta.content;
-					}
-					if (content) {
-						responseText += content;
-						flushAssistantText();
-					}
-				} catch (e) {
-					console.error("Error parsing SSE data as JSON:", e, data);
 				}
 			}
 			if (sawDone) {
 				break;
 			}
 		}
+		completionMs = Math.round(performance.now() - requestStartedAt);
+		updateMetrics();
 
 		// Add completed response to chat history
 		if (responseText.length > 0) {
@@ -186,10 +196,13 @@ async function sendMessage() {
 		}
 	} catch (error) {
 		console.error("Error:", error);
-		addMessageToChat(
-			"assistant",
-			`Sorry, there was an error processing your request: ${error.message}`,
-		);
+		const errorMessage = `Sorry, there was an error processing your request: ${error.message}`;
+		if (assistantTextEl && metricsEl) {
+			assistantTextEl.textContent = errorMessage;
+			metricsEl.textContent = "";
+		} else {
+			addMessageToChat("assistant", errorMessage);
+		}
 	} finally {
 		// Hide typing indicator
 		typingIndicator.classList.remove("visible");
@@ -198,6 +211,7 @@ async function sendMessage() {
 		isProcessing = false;
 		userInput.disabled = false;
 		sendButton.disabled = false;
+		modelSelect.disabled = false;
 		userInput.focus();
 	}
 }
@@ -208,7 +222,9 @@ async function sendMessage() {
 function addMessageToChat(role, content) {
 	const messageEl = document.createElement("div");
 	messageEl.className = `message ${role}-message`;
-	messageEl.innerHTML = `<p>${content}</p>`;
+	const textEl = document.createElement("p");
+	textEl.textContent = content;
+	messageEl.appendChild(textEl);
 	chatMessages.appendChild(messageEl);
 
 	// Scroll to bottom

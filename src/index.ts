@@ -13,6 +13,9 @@ import { Env, ChatMessage } from "./types";
 const SYSTEM_PROMPT =
 	"You are a helpful, friendly assistant. Provide concise and accurate responses.";
 
+const MODEL_DEPLOYMENTS = new Set(["gpt-5-mini", "gpt-5.4-nano"]);
+const DEFAULT_MODEL_DEPLOYMENT = "gpt-5.4-nano";
+
 export default {
 	/**
 	 * Main request handler for the Worker
@@ -55,9 +58,12 @@ async function handleChatRequest(
 ): Promise<Response> {
 	try {
 		// Parse JSON request body
-		const { messages = [] } = (await request.json()) as {
+		const { messages = [], model = DEFAULT_MODEL_DEPLOYMENT } =
+			(await request.json()) as {
 			messages: ChatMessage[];
+			model?: string;
 		};
+		const deployment = getAllowedDeployment(model);
 
 		// Add system prompt if not present
 		if (!messages.some((msg) => msg.role === "system")) {
@@ -65,7 +71,7 @@ async function handleChatRequest(
 		}
 
 		const startedAt = performance.now();
-		const azureResponse = await fetch(getAzureChatCompletionsUrl(env), {
+		const azureResponse = await fetch(getAzureChatCompletionsUrl(env, deployment), {
 			method: "POST",
 			headers: {
 				"api-key": env.AZURE_OPENAI_API_KEY,
@@ -73,8 +79,8 @@ async function handleChatRequest(
 			},
 			body: JSON.stringify({
 				messages,
-				max_completion_tokens: 1024,
-				reasoning_effort: "none",
+				max_completion_tokens: 200,
+				reasoning_effort: getReasoningEffort(deployment),
 				stream: true,
 			}),
 		});
@@ -115,7 +121,7 @@ async function handleChatRequest(
 					upstreamStartedMs,
 					firstTokenMs: getFirstTokenLatencyMs(),
 					completedMs,
-					deployment: env.AZURE_OPENAI_DEPLOYMENT,
+					deployment,
 				});
 			})(),
 		);
@@ -142,9 +148,17 @@ async function handleChatRequest(
 	}
 }
 
-function getAzureChatCompletionsUrl(env: Env): string {
+function getAllowedDeployment(model: string): string {
+	return MODEL_DEPLOYMENTS.has(model) ? model : DEFAULT_MODEL_DEPLOYMENT;
+}
+
+function getReasoningEffort(deployment: string): "minimal" | "none" {
+	return deployment === "gpt-5-mini" ? "minimal" : "none";
+}
+
+function getAzureChatCompletionsUrl(env: Env, deploymentName: string): string {
 	const endpoint = env.AZURE_OPENAI_ENDPOINT.replace(/\/+$/, "");
-	const deployment = encodeURIComponent(env.AZURE_OPENAI_DEPLOYMENT);
+	const deployment = encodeURIComponent(deploymentName);
 	const apiVersion = encodeURIComponent(env.AZURE_OPENAI_API_VERSION);
 
 	return `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
