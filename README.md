@@ -156,6 +156,8 @@ View deployed logs with:
 npx wrangler tail
 ```
 
+The request uses `reasoning_effort: "none"` for GPT-5.4 nano.
+
 ### Modifying the System Prompt
 
 The default system prompt can be changed by updating the `SYSTEM_PROMPT` constant in `src/index.ts`.

@@ -88,7 +88,14 @@ async function sendMessage() {
 
 		// Handle errors
 		if (!response.ok) {
-			throw new Error("Failed to get response");
+			let errorMessage = "Failed to get response";
+			try {
+				const errorBody = await response.json();
+				errorMessage = errorBody.details || errorBody.error || errorMessage;
+			} catch {
+				errorMessage = await response.text();
+			}
+			throw new Error(errorMessage);
 		}
 		if (!response.body) {
 			throw new Error("Response body is null");
@@ -181,7 +188,7 @@ async function sendMessage() {
 		console.error("Error:", error);
 		addMessageToChat(
 			"assistant",
-			"Sorry, there was an error processing your request.",
+			`Sorry, there was an error processing your request: ${error.message}`,
 		);
 	} finally {
 		// Hide typing indicator

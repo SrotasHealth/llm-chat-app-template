@@ -73,7 +73,7 @@ async function handleChatRequest(
 			},
 			body: JSON.stringify({
 				messages,
-				max_tokens: 1024,
+				max_completion_tokens: 1024,
 				reasoning_effort: "none",
 				stream: true,
 			}),
@@ -89,7 +89,11 @@ async function handleChatRequest(
 				upstreamStartedMs,
 			});
 			return new Response(
-				JSON.stringify({ error: "Azure OpenAI request failed" }),
+				JSON.stringify({
+					error: "Azure OpenAI request failed",
+					status: azureResponse.status,
+					details: errorBody,
+				}),
 				{
 					status: 502,
 					headers: { "content-type": "application/json" },
