@@ -12,11 +12,13 @@
 		"binding": "ASSETS",
 		"directory": "./public"
 	},
+	"vars": {
+		"AZURE_OPENAI_ENDPOINT": "https://medsights.openai.azure.com",
+		"AZURE_OPENAI_DEPLOYMENT": "gpt-5.4-nano",
+		"AZURE_OPENAI_API_VERSION": "2024-12-01-preview"
+	},
 	"observability": {
 		"enabled": true
-	},
-	"ai": {
-		"binding": "AI"
 	},
 	"upload_source_maps": true
 }

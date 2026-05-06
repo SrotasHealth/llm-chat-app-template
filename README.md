@@ -1,6 +1,6 @@
 # LLM Chat Application Template
 
-A simple, ready-to-deploy chat application template powered by Cloudflare Workers AI. This template provides a clean starting point for building AI chat applications with streaming responses.
+A simple, ready-to-deploy chat application template powered by Azure OpenAI on Cloudflare Workers. This template provides a clean starting point for building AI chat applications with streaming responses and measuring upstream latency.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/templates/tree/main/llm-chat-app-template)
 
@@ -8,18 +8,18 @@ A simple, ready-to-deploy chat application template powered by Cloudflare Worker
 
 ## Demo
 
-This template demonstrates how to build an AI-powered chat interface using Cloudflare Workers AI with streaming responses. It features:
+This template demonstrates how to build an AI-powered chat interface using Azure OpenAI with streaming responses from a Cloudflare Worker. It features:
 
 - Real-time streaming of AI responses using Server-Sent Events (SSE)
 - Easy customization of models and system prompts
-- Support for AI Gateway integration
+- Azure OpenAI first-token and total latency logging
 - Clean, responsive UI that works on mobile and desktop
 
 ## Features
 
 - 💬 Simple and responsive chat interface
 - ⚡ Server-Sent Events (SSE) for streaming responses
-- 🧠 Powered by Cloudflare Workers AI LLMs
+- 🧠 Powered by an Azure OpenAI hosted model
 - 🛠️ Built with TypeScript and Cloudflare Workers
 - 📱 Mobile-friendly design
 - 🔄 Maintains chat history on the client
@@ -32,7 +32,8 @@ This template demonstrates how to build an AI-powered chat interface using Cloud
 
 - [Node.js](https://nodejs.org/) (v18 or newer)
 - [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/)
-- A Cloudflare account with Workers AI access
+- A Cloudflare account
+- An Azure OpenAI resource with a chat model deployment
 
 ### Installation
 
@@ -54,6 +55,24 @@ This template demonstrates how to build an AI-powered chat interface using Cloud
    npm run cf-typegen
    ```
 
+4. Configure Azure OpenAI:
+
+   Update the non-secret values in `wrangler.jsonc`:
+
+   ```jsonc
+   "vars": {
+     "AZURE_OPENAI_ENDPOINT": "https://YOUR_RESOURCE_NAME.openai.azure.com",
+     "AZURE_OPENAI_DEPLOYMENT": "YOUR_DEPLOYMENT_NAME",
+     "AZURE_OPENAI_API_VERSION": "2024-10-21"
+   }
+   ```
+
+   Store the API key as a Wrangler secret:
+
+   ```bash
+   npx wrangler secret put AZURE_OPENAI_API_KEY
+   ```
+
 ### Development
 
 Start a local development server:
@@ -64,7 +83,7 @@ npm run dev
 
 This will start a local server at http://localhost:8787.
 
-Note: Using Workers AI accesses your Cloudflare account even during local development, which will incur usage charges.
+Note: Chat requests call your Azure OpenAI deployment, which may incur Azure usage charges.
 
 ### Deployment
 
@@ -79,7 +98,7 @@ npm run deploy
 View real-time logs associated with any deployed Worker:
 
 ```bash
-npm wrangler tail
+npx wrangler tail
 ```
 
 ## Project Structure
@@ -102,11 +121,11 @@ npm wrangler tail
 
 ### Backend
 
-The backend is built with Cloudflare Workers and uses the Workers AI platform to generate responses. The main components are:
+The backend is built with Cloudflare Workers and calls Azure OpenAI to generate responses. The main components are:
 
 1. **API Endpoint** (`/api/chat`): Accepts POST requests with chat messages and streams responses
 2. **Streaming**: Uses Server-Sent Events (SSE) for real-time streaming of AI responses
-3. **Workers AI Binding**: Connects to Cloudflare's AI service via the Workers AI binding
+3. **Latency logging**: Logs upstream connection, first-token, and total completion timing to Worker logs
 
 ### Frontend
 
@@ -121,22 +140,21 @@ The frontend is a simple HTML/CSS/JavaScript application that:
 
 ### Changing the Model
 
-To use a different AI model, update the `MODEL_ID` constant in `src/index.ts`. You can find available models in the [Cloudflare Workers AI documentation](https://developers.cloudflare.com/workers-ai/models/).
+To use a different Azure OpenAI hosted model, deploy that model in Azure OpenAI and update `AZURE_OPENAI_DEPLOYMENT` in `wrangler.jsonc`.
 
-### Using AI Gateway
+### Checking Latency
 
-The template includes commented code for AI Gateway integration, which provides additional capabilities like rate limiting, caching, and analytics.
+The Worker logs Azure OpenAI timing for each `/api/chat` request:
 
-To enable AI Gateway:
+- `upstreamStartedMs`: time until Azure returns response headers
+- `firstTokenMs`: time until the first streamed bytes arrive
+- `completedMs`: total time until the stream finishes
 
-1. [Create an AI Gateway](https://dash.cloudflare.com/?to=/:account/ai/ai-gateway) in your Cloudflare dashboard
-2. Uncomment the gateway configuration in `src/index.ts`
-3. Replace `YOUR_GATEWAY_ID` with your actual AI Gateway ID
-4. Configure other gateway options as needed:
-   - `skipCache`: Set to `true` to bypass gateway caching
-   - `cacheTtl`: Set the cache time-to-live in seconds
+View deployed logs with:
 
-Learn more about [AI Gateway](https://developers.cloudflare.com/ai-gateway/).
+```bash
+npx wrangler tail
+```
 
 ### Modifying the System Prompt
 
@@ -149,5 +167,4 @@ The UI styling is contained in the `<style>` section of `public/index.html`. You
 ## Resources
 
 - [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
-- [Cloudflare Workers AI Documentation](https://developers.cloudflare.com/workers-ai/)
-- [Workers AI Models](https://developers.cloudflare.com/workers-ai/models/)
+- [Azure OpenAI Documentation](https://learn.microsoft.com/azure/ai-services/openai/)

@@ -1,17 +1,13 @@
 /**
  * LLM Chat Application Template
  *
- * A simple chat application using Cloudflare Workers AI.
+ * A simple chat application using Azure OpenAI from Cloudflare Workers.
  * This template demonstrates how to implement an LLM-powered chat interface with
  * streaming responses using Server-Sent Events (SSE).
  *
  * @license MIT
  */
 import { Env, ChatMessage } from "./types";
-
-// Model ID for Workers AI model
-// https://developers.cloudflare.com/workers-ai/models/
-const MODEL_ID = "openai/gpt-5.4-nano";
 
 // Default system prompt
 const SYSTEM_PROMPT =
@@ -37,7 +33,7 @@ export default {
 		if (url.pathname === "/api/chat") {
 			// Handle POST requests for chat
 			if (request.method === "POST") {
-				return handleChatRequest(request, env);
+				return handleChatRequest(request, env, ctx);
 			}
 
 			// Method not allowed for other request types
@@ -55,6 +51,7 @@ export default {
 async function handleChatRequest(
 	request: Request,
 	env: Env,
+	ctx: ExecutionContext,
 ): Promise<Response> {
 	try {
 		// Parse JSON request body
@@ -67,28 +64,66 @@ async function handleChatRequest(
 			messages.unshift({ role: "system", content: SYSTEM_PROMPT });
 		}
 
-		const stream = await env.AI.run(
-			MODEL_ID,
-			{
+		const startedAt = performance.now();
+		const azureResponse = await fetch(getAzureChatCompletionsUrl(env), {
+			method: "POST",
+			headers: {
+				"api-key": env.AZURE_OPENAI_API_KEY,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({
 				messages,
 				max_tokens: 1024,
+				reasoning_effort: "none",
 				stream: true,
-			},
-			{
-				// Uncomment to use AI Gateway
-				// gateway: {
-				//   id: "YOUR_GATEWAY_ID", // Replace with your AI Gateway ID
-				//   skipCache: false,      // Set to true to bypass cache
-				//   cacheTtl: 3600,        // Cache time-to-live in seconds
-				// },
-			},
+			}),
+		});
+		const upstreamStartedMs = Math.round(performance.now() - startedAt);
+
+		if (!azureResponse.ok || !azureResponse.body) {
+			const errorBody = await azureResponse.text();
+			console.error("Azure OpenAI request failed:", {
+				status: azureResponse.status,
+				statusText: azureResponse.statusText,
+				body: errorBody,
+				upstreamStartedMs,
+			});
+			return new Response(
+				JSON.stringify({ error: "Azure OpenAI request failed" }),
+				{
+					status: 502,
+					headers: { "content-type": "application/json" },
+				},
+			);
+		}
+
+		const { stream, getFirstTokenLatencyMs } = trackStreamingLatency(
+			azureResponse.body,
+			startedAt,
+		);
+		const [clientStream, metricsStream] = stream.tee();
+
+		ctx.waitUntil(
+			(async () => {
+				await streamFinished(metricsStream);
+				const completedMs = Math.round(performance.now() - startedAt);
+				console.info("Azure OpenAI latency", {
+					upstreamStartedMs,
+					firstTokenMs: getFirstTokenLatencyMs(),
+					completedMs,
+					deployment: env.AZURE_OPENAI_DEPLOYMENT,
+				});
+			})(),
 		);
 
-		return new Response(stream, {
+		return new Response(clientStream, {
 			headers: {
-				"content-type": "text/event-stream; charset=utf-8",
+				"content-type":
+					azureResponse.headers.get("content-type") ??
+					"text/event-stream; charset=utf-8",
 				"cache-control": "no-cache",
 				connection: "keep-alive",
+				"server-timing": `azure_upstream;dur=${upstreamStartedMs}`,
 			},
 		});
 	} catch (error) {
@@ -100,5 +135,50 @@ async function handleChatRequest(
 				headers: { "content-type": "application/json" },
 			},
 		);
+	}
+}
+
+function getAzureChatCompletionsUrl(env: Env): string {
+	const endpoint = env.AZURE_OPENAI_ENDPOINT.replace(/\/+$/, "");
+	const deployment = encodeURIComponent(env.AZURE_OPENAI_DEPLOYMENT);
+	const apiVersion = encodeURIComponent(env.AZURE_OPENAI_API_VERSION);
+
+	return `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+}
+
+function trackStreamingLatency(
+	body: ReadableStream<Uint8Array>,
+	startedAt: number,
+): {
+	stream: ReadableStream<Uint8Array>;
+	getFirstTokenLatencyMs: () => number | null;
+} {
+	let firstTokenLatencyMs: number | null = null;
+
+	const stream = body.pipeThrough(
+		new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				if (firstTokenLatencyMs === null && chunk.byteLength > 0) {
+					firstTokenLatencyMs = Math.round(performance.now() - startedAt);
+				}
+				controller.enqueue(chunk);
+			},
+		}),
+	);
+
+	return {
+		stream,
+		getFirstTokenLatencyMs: () => firstTokenLatencyMs,
+	};
+}
+
+async function streamFinished(stream: ReadableStream<Uint8Array>): Promise<void> {
+	const reader = stream.getReader();
+	try {
+		while (!(await reader.read()).done) {
+			// Drain the cloned stream so total latency is logged after Azure finishes.
+		}
+	} finally {
+		reader.releaseLock();
 	}
 }
